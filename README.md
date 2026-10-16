@@ -2,6 +2,12 @@
 
 Googleフォームで受け付けたExcelと前CSVから変換後CSVを生成し、提出された後CSV（正解データ）との一致を確認してメールで届けるGASプロトタイプです。
 
+## デモを試す
+
+[スプシアシストOne｜デモ受付フォーム](https://docs.google.com/forms/d/e/1FAIpQLSeIek39uhJNZM5DyqXGwWQA8Ix8kjcrMI3ST8nxVOz4CCiylA/viewform)
+
+Googleアカウントでログインし、検証済みのデモ用Excel・前CSV・後CSVを提出してください。処理結果はフォームで自動収集したメールアドレスに届きます。デモファイルは担当者から受け取ってください。
+
 ## 動作の流れ
 
 1. フォームでメールアドレスを自動収集し、Excel・前CSV・後CSVと対象シート名・列範囲を受け付けます。
@@ -24,19 +30,3 @@ Googleフォームで受け付けたExcelと前CSVから変換後CSVを生成し
 - `tests/`: Googleに接続せず動く自動テスト
 - `.github/workflows/check.yml`: push・PR時のテストと構文確認
 - [セットアップと更新手順](docs/public-setup.md)
-
-tb社月次報告書ロボを参考に、番号付きGASモジュール、GitHubによるソース管理、claspによる手動同期を採用しています。GitHubへのpushだけでは稼働中GASは更新されません。
-
-## BootCampメンバーの閲覧
-
-このリポジトリは公開閲覧用です。URLを週次報告で共有すれば、メンバーの個別招待は不要です。閲覧者に元リポジトリの書き込み権限は付与していません。公開範囲はインターネット全体で、コードのダウンロードやforkは可能です。
-
-本番のDrive・フォーム・GASのID、認証情報、提出ファイル、処理ログ、個人情報を含む作業記録は登録していません。GitHubの閲覧権限からGoogle側の利用・編集権限が付与されることはありません。
-
-## ローカルテスト
-
-Node.js 22で実行します。追加パッケージは不要です。
-
-```sh
-node --test tests/*.test.cjs
-```
