@@ -9,7 +9,7 @@ function setupFormIntake() {
     '前CSVからコピーする開始列', '前CSVからコピーする終了列',
     '前CSVを現Excelに貼り付ける開始列', '前CSVを現Excelに貼り付ける終了列',
     '現Excelから後CSVへ出力する開始列', '現Excelから後CSVへ出力する終了列'
-  ];
+  ].concat(formConditionFields_().map(field => field.title));
   required.forEach((title, index) => {
     const matches = titles.filter(item => item.title === title);
     if (matches.length !== 1) throw new Error('質問がないか重複しています: ' + title);
@@ -22,7 +22,7 @@ function setupFormIntake() {
   if (!ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'onIntakeSubmit')) {
     ScriptApp.newTrigger('onIntakeSubmit').forForm(form).onFormSubmit().create();
   }
-  console.log('SETUP_OK: 質問11項目・フォルダ6件を確認し、フォーム送信トリガーを設定しました。');
+  console.log('SETUP_OK: 質問' + required.length + '項目・フォルダ6件を確認し、フォーム送信トリガーを設定しました。');
 }
 
 function onIntakeSubmit(event) {
@@ -47,8 +47,9 @@ function processResponseLocked_(response) {
     const mapping = JSON.parse(props.getProperty('FORM_ITEMS') || '[]');
     if (!mapping.length) throw new Error('setupFormIntakeを先に実行してください。');
     response.getItemResponses().forEach(answer => {
-      const configured = mapping.find(item => item.id === String(answer.getItem().getId()));
-      if (configured) answers[configured.title] = answer.getResponse();
+      const item = answer.getItem();
+      const configured = mapping.find(entry => entry.id === String(item.getId()));
+      answers[configured ? configured.title : item.getTitle()] = answer.getResponse();
     });
     const oneFile = title => {
       const value = answers[title];
@@ -66,7 +67,9 @@ function processResponseLocked_(response) {
       targetStart: answers['前CSVを現Excelに貼り付ける開始列'], targetEnd: answers['前CSVを現Excelに貼り付ける終了列'],
       outputStart: answers['現Excelから後CSVへ出力する開始列'], outputEnd: answers['現Excelから後CSVへ出力する終了列']
     });
-    applyDemoProfile_(job);
+    Object.assign(job, parseFormConditions_(answers));
+    // Validate a copy: validateJob_ normalizes column letters for conversion.
+    validateJob_(JSON.parse(JSON.stringify(job)));
     const sourceKeys = ['excelFileId', 'beforeCsvFileId', 'expectedCsvFileId'];
     const sourceFolders = [CONFIG.inputFolderIds.excel, CONFIG.inputFolderIds.beforeCsv, CONFIG.inputFolderIds.afterCsv];
     sourceKeys.forEach((key, i) => {
@@ -90,25 +93,68 @@ function processResponseLocked_(response) {
   }
 }
 
-function applyDemoProfile_(job) {
-  const ids = [job.excelFileId, job.beforeCsvFileId, job.expectedCsvFileId];
-  const hashes = ids.map(id => {
-    const blob = DriveApp.getFileById(id).getBlob();
-    if (blob.getBytes().length > CONFIG.maxBytes) diagnosticNg_('提出ファイルが10 MBを超えています。');
-    return Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, blob.getBytes())
-      .map(byte => (byte & 255).toString(16).padStart(2, '0')).join('');
+/** Additional conditions are explicit for every customer; no file fingerprint gate. */
+function formConditionFields_() {
+  const yesNo = ['あり', 'なし'];
+  const encodings = ['UTF-8', 'Shift_JIS'];
+  return [
+    {key: 'csvStartRow', title: '前CSVからコピーする開始行', help: '1以上の整数。ヘッダーも貼り付ける場合は1、1行目のヘッダーを除く場合は2。ここから最終行までコピーします。'},
+    {key: 'pasteStartRow', title: '現Excelに貼り付ける開始行', help: '1以上の整数。ヘッダーを残して2行目からデータを貼る場合は2。指定列の開始行以降の既存値はクリアします。数式のある範囲には貼り付けできません。'},
+    {key: 'outputStartRow', title: '現Excelから後CSVへ出力する開始行', help: '1以上の整数。出力にヘッダーを含める場合は、その行から指定してください。'},
+    {key: 'outputEndRow', title: '現Excelから後CSVへ出力する終了行', help: '1以上の整数。最後に出力する行番号を指定します。出力範囲の行数・列数・内容を、提出する後CSV全体と一致させてください。'},
+    {key: 'beforeHasHeader', title: '前CSVの1行目にヘッダーはありますか？', choices: yesNo, help: '列名の行がある場合は「あり」。開始行はこの回答とは別に指定してください。'},
+    {key: 'expectedHasHeader', title: '正解の後CSVの1行目にヘッダーはありますか？', choices: yesNo, help: '照合時にヘッダーを自動で除外しません。出力範囲にも同じヘッダーを含めてください。'},
+    {key: 'beforeEncoding', title: '前CSVの文字コード', choices: encodings, help: '提出する前CSVの保存時の文字コードを選択してください。'},
+    {key: 'expectedEncoding', title: '正解の後CSVの文字コード', choices: encodings, help: '提出する後CSVの保存時の文字コードを選択してください。'},
+    {key: 'outputEncoding', title: '変換後CSVの文字コード', choices: encodings, help: 'メールで受け取るCSVの文字コードを選択してください。'},
+    {key: 'outputNewline', title: '変換後CSVの改行コード', choices: ['CRLF', 'LF'], help: 'WindowsのExcel向けは通常CRLFを選択します。'},
+    {key: 'outputBom', title: '変換後CSVにBOMを付けますか？', choices: yesNo, help: 'UTF-8をExcelで開く場合は「あり」を推奨します。Shift_JISは必ず「なし」を選択してください。'}
+  ];
+}
+
+function parseFormConditions_(answers) {
+  const conditions = {};
+  formConditionFields_().forEach(field => {
+    const text = String(answers[field.title] === undefined ? '' : answers[field.title]).trim();
+    if (!text) diagnosticNg_('変換条件の入力不備: 「' + field.title + '」が未回答です。フォームを開き直し、入力して再提出してください。');
+    if (!field.choices) {
+      if (!/^[1-9][0-9]*$/.test(text) || !Number.isSafeInteger(Number(text))) diagnosticNg_('変換条件の入力不備: 「' + field.title + '」は1以上の整数で指定してください。');
+      conditions[field.key] = Number(text);
+    } else {
+      if (!field.choices.includes(text)) diagnosticNg_('変換条件の入力不備: 「' + field.title + '」は ' + field.choices.join(' / ') + ' から選択してください。');
+      conditions[field.key] = ['beforeHasHeader', 'expectedHasHeader', 'outputBom'].includes(field.key) ? text === 'あり' : text;
+    }
   });
-  if (hashes.join(',') === 'd12af3b1eac81d4711740f248eb46b90,9b5ecd1335ebd94494b60dbabf508c78,498b20893f432a4c8192dddb8ea7a97e') {
-    Object.assign(job, {
-      profile: 'verified-demo-20261016',
-      csvStartRow: 1, pasteStartRow: 1, outputStartRow: 1, outputEndRow: 11,
-      beforeHasHeader: true, expectedHasHeader: true,
-      beforeEncoding: 'UTF-8', expectedEncoding: 'UTF-8', outputEncoding: 'UTF-8',
-      outputNewline: 'CRLF', outputBom: true
+  if (conditions.outputEndRow < conditions.outputStartRow) diagnosticNg_('変換条件の入力不備: 出力終了行は出力開始行以上にしてください。');
+  if (conditions.outputBom && conditions.outputEncoding !== 'UTF-8') diagnosticNg_('変換条件の入力不備: Shift_JISを選んだ場合、BOMは「なし」にしてください。');
+  return conditions;
+}
+
+/** Run once after sync. Re-running reuses questions and preserves responses. */
+function setupIndependentDataForm() {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    const form = FormApp.openById(CONFIG.formId);
+    const fields = formConditionFields_();
+    // Preflight every existing item before adding or editing any question.
+    fields.forEach(field => {
+      const matches = form.getItems().filter(item => item.getTitle() === field.title);
+      if (matches.length > 1 || (matches.length && String(matches[0].getType()) !== (field.choices ? 'LIST' : 'TEXT'))) throw new Error('変換条件の質問が重複、または形式が異なります: ' + field.title);
     });
-  } else {
-    diagnosticNg_('開始行・出力行・文字コードが未設定です。現在は検証済みデモ3ファイルにのみ自動設定できます。担当者と変換条件を確認してください。');
-  }
+    fields.forEach(field => {
+      const existing = form.getItems().find(item => item.getTitle() === field.title);
+      const item = existing ? (field.choices ? existing.asListItem() : existing.asTextItem()) : (field.choices ? form.addListItem() : form.addTextItem());
+      item.setTitle(field.title).setHelpText(field.help).setRequired(true);
+      if (field.choices) item.setChoiceValues(field.choices);
+      else item.setValidation(FormApp.createTextValidation().requireTextMatchesPattern('^[1-9][0-9]*$').setHelpText('1以上の整数を入力してください。').build());
+      // Keep conversion conditions before the final consent questions.
+      const consent = form.getItems().find(entry => entry.getTitle() === '受付対象外の条件を確認しました');
+      if (consent && item.getIndex() > consent.getIndex()) form.moveItem(item.getIndex(), consent.getIndex());
+    });
+    setupFormIntake();
+    console.log('INDEPENDENT_DATA_FORM_OK: 任意の提出データを、フォームで指定された条件で受け付けます。条件不足・非対応・不一致は通知して停止します。');
+  } finally { lock.releaseLock(); }
 }
 
 function reportIntakeFailure_(job, error) {

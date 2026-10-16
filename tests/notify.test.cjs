@@ -81,3 +81,9 @@ test('入力不備でもオーナーへ区分と具体的な修正方法を別�
  const e=env();e.ctx.notifyCompletion_(job,{jobId:'test',status:'NG',reason:'コピー元範囲がCSVの外です。'});
  assert.equal(e.messages.length,2);assert.match(e.messages[1].body,/ユーザーによる修正・再提出/);assert.match(e.messages[1].body,/実際の列数/);
 });
+test('独自データの条件不足・文字コード不備はユーザーへ修正と再提出を案内する',()=>{
+ const e=env();
+ for(const reason of ['変換条件の入力不備: 「前CSVからコピーする開始行」が未回答です。','変換条件の入力不備: Shift_JISを選んだ場合、BOMは「なし」にしてください。','文字コードを確認してください。']) {
+  const mail=e.ctx.buildResultMail_({jobId:'x',status:'NG',reason});assert.match(mail.subject,/再提出/);assert.match(mail.body,/再度提出/);assert.match(mail.body,new RegExp(reason.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
+ }
+});
