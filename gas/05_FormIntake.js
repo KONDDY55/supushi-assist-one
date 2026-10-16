@@ -97,18 +97,16 @@ function processResponseLocked_(response) {
 function formConditionFields_() {
   const yesNo = ['あり', 'なし'];
   return [
-    {key: 'csvStartRow', title: '前CSVからコピーする開始行', help: '1以上の整数。ヘッダーも貼り付ける場合は1、1行目のヘッダーを除く場合は2。ここから最終行までコピーします。'},
-    {key: 'pasteStartRow', title: '現Excelに貼り付ける開始行', help: '1以上の整数。ヘッダーを残して2行目からデータを貼る場合は2。指定列の開始行以降の既存値はクリアします。数式のある範囲には貼り付けできません。'},
-    {key: 'outputStartRow', title: '現Excelから後CSVへ出力する開始行', help: '1以上の整数。出力にヘッダーを含める場合は、その行から指定してください。'},
-    {key: 'outputEndRow', title: '現Excelから後CSVへ出力する終了行', help: '1以上の整数。最後に出力する行番号を指定します。出力範囲の行数・列数・内容を、提出する後CSV全体と一致させてください。'},
-    {key: 'beforeHasHeader', title: '前CSVの1行目にヘッダーはありますか？', choices: yesNo, help: '列名の行がある場合は「あり」。開始行はこの回答とは別に指定してください。'},
-    {key: 'expectedHasHeader', title: '正解の後CSVの1行目にヘッダーはありますか？', choices: yesNo, help: '照合時にヘッダーを自動で除外しません。出力範囲にも同じヘッダーを含めてください。'}
+    {key: 'beforeHasHeader', title: '前CSVの1行目にヘッダーはありますか？', choices: yesNo, help: '1行目に列名がある場合は「あり」。1行目を除いたデータだけを貼り付けます。'},
+    {key: 'expectedHasHeader', title: '正解の後CSVの1行目にヘッダーはありますか？', choices: yesNo, help: '1行目に列名がある場合は「あり」。ヘッダーを除いたデータだけを正解として照合します。'},
+    {key: 'inputHasHeader', title: '現Excelの貼り付け先シートの1行目にヘッダーはありますか？', choices: yesNo, help: '「あり」は1行目を残します。既存データがあればその先頭行から、空ならヘッダーの次の行から貼り付けます。'},
+    {key: 'outputHasHeader', title: '現Excelの出力元シートの1行目にヘッダーはありますか？', choices: yesNo, help: '「あり」は1行目を除きます。変換後CSVはヘッダーを含まないデータのみで出力します。'}
   ];
 }
 
 function parseFormConditions_(answers) {
   // Ignore legacy format answers too: the public form has one output format.
-  const conditions = {beforeEncoding: 'AUTO', expectedEncoding: 'AUTO', outputEncoding: 'UTF-8', outputNewline: 'CRLF', outputBom: true};
+  const conditions = {rowMode: 'AUTO', beforeEncoding: 'AUTO', expectedEncoding: 'AUTO', outputEncoding: 'UTF-8', outputNewline: 'CRLF', outputBom: true};
   formConditionFields_().forEach(field => {
     const text = String(answers[field.title] === undefined ? '' : answers[field.title]).trim();
     if (!text) diagnosticNg_('変換条件の入力不備: 「' + field.title + '」が未回答です。フォームを開き直し、入力して再提出してください。');
@@ -117,10 +115,9 @@ function parseFormConditions_(answers) {
       conditions[field.key] = Number(text);
     } else {
       if (!field.choices.includes(text)) diagnosticNg_('変換条件の入力不備: 「' + field.title + '」は ' + field.choices.join(' / ') + ' から選択してください。');
-      conditions[field.key] = ['beforeHasHeader', 'expectedHasHeader', 'outputBom'].includes(field.key) ? text === 'あり' : text;
+      conditions[field.key] = ['beforeHasHeader', 'expectedHasHeader', 'inputHasHeader', 'outputHasHeader'].includes(field.key) ? text === 'あり' : text;
     }
   });
-  if (conditions.outputEndRow < conditions.outputStartRow) diagnosticNg_('変換条件の入力不備: 出力終了行は出力開始行以上にしてください。');
   return conditions;
 }
 
@@ -154,7 +151,7 @@ function setupIndependentDataForm() {
 
 /** Remove retired technical questions, backing up their historical answers first. */
 function simplifyCsvFormatQuestions_(form) {
-  const retired = ['前CSVの文字コード', '正解の後CSVの文字コード', '変換後CSVの文字コード', '変換後CSVの改行コード', '変換後CSVにBOMを付けますか？'];
+  const retired = ['前CSVからコピーする開始行', '現Excelに貼り付ける開始行', '現Excelから後CSVへ出力する開始行', '現Excelから後CSVへ出力する終了行', '前CSVの文字コード', '正解の後CSVの文字コード', '変換後CSVの文字コード', '変換後CSVの改行コード', '変換後CSVにBOMを付けますか？'];
   const items = form.getItems().filter(item => retired.includes(item.getTitle()));
   if (items.length) {
     const ids = items.map(item => String(item.getId()));
@@ -170,9 +167,9 @@ function simplifyCsvFormatQuestions_(form) {
   const matches = form.getItems().filter(item => item.getTitle() === noticeTitle);
   if (matches.length > 1 || (matches.length && String(matches[0].getType()) !== 'SECTION_HEADER')) throw new Error('CSV形式の注意書きが重複、または形式が異なります。');
   const notice = matches.length ? matches[0].asSectionHeaderItem() : form.addSectionHeaderItem();
-  notice.setTitle(noticeTitle).setHelpText('文字コード・改行コード・BOMの指定は不要です。提出CSVはシステムがUTF-8／Shift_JISを自動判定して読み込みます。判定できない場合は理由と対処方法をメールでお知らせします。変換後CSVはUTF-8（Excelで開きやすいBOM付き）・Windows向け改行でメール添付します。正解CSVとは文字コードや改行形式ではなく、行数・列数・各セルの内容を照合します。');
+  notice.setTitle(noticeTitle).setHelpText('行番号・文字コード・改行コード・BOMの指定は不要です。ヘッダーは1行目として扱い、「あり」の場合は除外します。指定列の最初のデータ行から、対象列がすべて空白の最初の行の直前までを自動で処理します。途中の空白行より後にデータがある場合は、取りこぼし防止のためNGを通知します。貼り付け先が空の場合はヘッダーの次の行（ヘッダーなしは1行目）から貼り付けます。変換後CSVはヘッダーなしのデータのみです。提出CSVはシステムがUTF-8／Shift_JISを自動判定して読み込みます。判定できない場合は理由と対処方法をメールでお知らせします。変換後CSVはUTF-8（Excelで開きやすいBOM付き）・Windows向け改行でメール添付します。正解CSVとは文字コードや改行形式ではなく、行数・列数・各セルの内容を照合します。');
   if (notice.getIndex() !== 0) form.moveItem(notice.getIndex(), 0);
-  console.log('CSV_FORMAT_FORM_OK: 文字コード・改行・BOMの5質問を廃止し、自動判定とUTF-8出力の注意書きを設定しました。');
+  console.log('CSV_FORMAT_FORM_OK: 行番号・文字コード・改行・BOMの質問を廃止し、自動判定の注意書きを設定しました。');
 }
 
 /** Existing installations can run this one function after syncing. */
@@ -200,4 +197,9 @@ function runConfiguredJob() {
   const id = PropertiesService.getScriptProperties().getProperty('JOB_FILE_ID');
   if (!id) throw new Error('Script PropertiesにJOB_FILE_IDを設定してください。');
   return runConversion(JSON.parse(DriveApp.getFileById(id).getBlob().getDataAsString('UTF-8')));
+}
+
+/** One-time migration for existing public form. */
+function setupAutomaticRowsForm() {
+  setupIndependentDataForm();
 }

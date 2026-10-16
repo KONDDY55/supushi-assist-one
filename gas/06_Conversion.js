@@ -87,6 +87,25 @@ function errorCells_(spreadsheetId) {
   return errors;
 }
 
+function autoPasteStartRow_(sheet, job) {
+  const start = job.inputHasHeader ? 2 : 1;
+  const last = sheet.getLastRow();
+  if (last < start || job.targetStart > sheet.getMaxColumns()) return start;
+  const width = Math.min(job.targetEnd, sheet.getMaxColumns()) - job.targetStart + 1;
+  const rows = sheet.getRange(start, job.targetStart, last - start + 1, width).getDisplayValues();
+  const offset = rows.findIndex(row => row.some(value => value !== ''));
+  return offset < 0 ? start : start + offset;
+}
+
+function autoOutputBlock_(sheet, job) {
+  if (job.outputEnd > sheet.getMaxColumns()) diagnosticNg_('出力範囲がシートの外です。');
+  const last = sheet.getLastRow();
+  const width = job.outputEnd - job.outputStart + 1;
+  if (last * width > CONFIG.maxCells) diagnosticNg_('出力範囲が試作のセル数上限を超えています。');
+  const rows = last ? sheet.getRange(1, job.outputStart, last, width).getDisplayValues() : [];
+  return dataBlock_(rows, job.outputHasHeader, 'Excelの出力元シート');
+}
+
 function inputRange_(sheet, data, job) {
   const endRow = job.pasteStartRow + data.length - 1;
   if (endRow > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), endRow - sheet.getMaxRows());

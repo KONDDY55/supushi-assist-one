@@ -27,10 +27,14 @@ function validateJob_(job) {
   columns.forEach(key => { job[key] = columnNumber_(job[key]); });
   if (job.sourceStart > job.sourceEnd || job.targetStart > job.targetEnd || job.outputStart > job.outputEnd) diagnosticNg_('開始列が終了列より後です。');
   if (job.sourceEnd - job.sourceStart !== job.targetEnd - job.targetStart) diagnosticNg_('コピー元と貼り付け先の列数が一致しません。');
-  ['csvStartRow', 'pasteStartRow', 'outputStartRow', 'outputEndRow'].forEach(key => {
-    if (!Number.isInteger(job[key]) || job[key] < 1) diagnosticNg_('正の整数の行番号を設定してください: ' + key);
-  });
-  if (job.outputEndRow < job.outputStartRow) diagnosticNg_('出力行範囲が逆です。');
+  if (job.rowMode === 'AUTO') {
+    if (typeof job.inputHasHeader !== 'boolean' || typeof job.outputHasHeader !== 'boolean') diagnosticNg_('Excelのヘッダー有無を指定してください。');
+  } else {
+    ['csvStartRow', 'pasteStartRow', 'outputStartRow', 'outputEndRow'].forEach(key => {
+      if (!Number.isInteger(job[key]) || job[key] < 1) diagnosticNg_('正の整数の行番号を設定してください: ' + key);
+    });
+    if (job.outputEndRow < job.outputStartRow) diagnosticNg_('出力行範囲が逆です。');
+  }
   if (typeof job.beforeHasHeader !== 'boolean' || typeof job.expectedHasHeader !== 'boolean') diagnosticNg_('CSVのヘッダー有無を指定してください。');
   ['beforeEncoding', 'expectedEncoding', 'outputEncoding'].forEach(key => {
     if (!(key === 'outputEncoding' ? ['UTF-8', 'Shift_JIS'] : ['UTF-8', 'Shift_JIS', 'AUTO']).includes(job[key])) diagnosticNg_('文字コードを指定してください: ' + key);
@@ -43,14 +47,33 @@ function validateJob_(job) {
 function validateCsvRows_(rows, hasHeader) {
   if (!rows.length || rows.every(r => r.every(v => v === ''))) diagnosticNg_('CSVが空です。');
   if (rows.length - (hasHeader ? 1 : 0) > CONFIG.maxDataRows) diagnosticNg_('CSVデータが10,000行以上です。');
-  const width = rows[0].length;
+  const width = rows.find(row => row.some(value => value !== '')).length;
+  rows.forEach((row, i) => { if (row.every(value => value === '') && row.length !== width) rows[i] = Array(width).fill(''); });
   if (rows.some(row => row.length !== width)) diagnosticNg_('CSVの列数が行ごとに異なります。');
   if (rows.length * width > CONFIG.maxCells) diagnosticNg_('試作のセル数上限を超えています。個別開発が必要です。');
 }
 
 function selectInput_(rows, job) {
-  if (job.sourceEnd > rows[0].length || job.csvStartRow > rows.length) diagnosticNg_('コピー元範囲がCSVの外です。');
+  if (job.sourceEnd > rows[0].length || (job.rowMode !== 'AUTO' && job.csvStartRow > rows.length)) diagnosticNg_('コピー元範囲がCSVの外です。');
+  if (job.rowMode === 'AUTO') {
+    const block = dataBlock_(rows.map(row => row.slice(job.sourceStart - 1, job.sourceEnd)), job.beforeHasHeader, '前CSV');
+    job.csvStartRow = block.startRow; job.csvEndRow = block.endRow;
+    return block.rows;
+  }
   return rows.slice(job.csvStartRow - 1).map(row => row.slice(job.sourceStart - 1, job.sourceEnd));
+}
+
+/** Blank means all selected cells are empty; preserve whitespace, zero and partial rows. */
+function dataBlock_(rows, hasHeader, label) {
+  const empty = row => row.every(value => String(value) === '');
+  let start = hasHeader ? 1 : 0;
+  while (start < rows.length && empty(rows[start])) start++;
+  if (start === rows.length) diagnosticNg_('行の自動判定: ' + label + 'にヘッダーを除いたデータがありません。');
+  let end = start;
+  while (end < rows.length && !empty(rows[end])) end++;
+  if (rows.slice(end).some(row => !empty(row))) diagnosticNg_('行の自動判定: ' + label + 'の空白行の後にデータがあります。途中の空白行を除いて再提出してください。');
+  if (end - start > CONFIG.maxDataRows) diagnosticNg_('CSVデータが10,000行以上です。');
+  return {rows: rows.slice(start, end), startRow: start + 1, endRow: end};
 }
 
 function compareCsv_(actual, expected) {

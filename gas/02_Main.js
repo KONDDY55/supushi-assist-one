@@ -27,11 +27,12 @@ function runConversionLocked_(rawJob) {
     inspectExcelFile_(originals[0]);
     result.inputFormats = {beforeCsv: {}, expectedCsv: {}};
     const before = readCsvFile_(originals[1], job.beforeEncoding, job.beforeHasHeader, result.inputFormats.beforeCsv);
-    const expected = readCsvFile_(originals[2], job.expectedEncoding, job.expectedHasHeader, result.inputFormats.expectedCsv);
+    let expected = readCsvFile_(originals[2], job.expectedEncoding, job.expectedHasHeader, result.inputFormats.expectedCsv);
     result.outputFormat = {encoding: job.outputEncoding, newline: job.outputNewline, bom: job.outputBom};
     const selected = selectInput_(before, job);
+    if (job.rowMode === 'AUTO') expected = dataBlock_(expected, job.expectedHasHeader, '正解の後CSV').rows;
     const cellCount = (job.outputEndRow - job.outputStartRow + 1) * (job.outputEnd - job.outputStart + 1);
-    if (cellCount > CONFIG.maxCells) diagnosticNg_('出力範囲が試作のセル数上限を超えています。');
+    if (job.rowMode !== 'AUTO' && cellCount > CONFIG.maxCells) diagnosticNg_('出力範囲が試作のセル数上限を超えています。');
     result.step = 'バックアップ・Excel変換';
     result.backupId = DriveApp.getFileById(CONFIG.excelSpreadsheetId).makeCopy('backup-' + job.id, DriveApp.getFolderById(CONFIG.sourceFolderId)).getId();
     props.setProperty(key, JSON.stringify(result));
@@ -45,11 +46,12 @@ function runConversionLocked_(rawJob) {
     if (book.getSheets().reduce((sum, s) => sum + s.getLastRow() * s.getLastColumn(), 0) > CONFIG.maxCells) diagnosticNg_('Excelが試作のセル数上限を超えています。');
     result.step = '前CSV貼り付け';
     // RAW prevents CSV values such as =1+1, 00123 and dates from becoming formulas/numbers.
+    if (job.rowMode === 'AUTO') job.pasteStartRow = autoPasteStartRow_(input, job);
     writeInput_(book.getId(), input, selected, job);
     SpreadsheetApp.flush();
-    if (job.outputEndRow > output.getMaxRows() || job.outputEnd > output.getMaxColumns()) diagnosticNg_('出力範囲がシートの外です。');
+    if ((job.rowMode !== 'AUTO' && job.outputEndRow > output.getMaxRows()) || job.outputEnd > output.getMaxColumns()) diagnosticNg_('出力範囲がシートの外です。');
     result.step = '再計算・互換性診断・正解照合';
-    const outputRange = output.getRange(job.outputStartRow, job.outputStart, job.outputEndRow - job.outputStartRow + 1, job.outputEnd - job.outputStart + 1);
+    const outputRange = job.rowMode === 'AUTO' ? null : output.getRange(job.outputStartRow, job.outputStart, job.outputEndRow - job.outputStartRow + 1, job.outputEnd - job.outputStart + 1);
     let actual;
     let matched = false;
     let reason = '';
@@ -57,7 +59,15 @@ function runConversionLocked_(rawJob) {
     let consecutive = 0;
     for (let attempt = 0; attempt < 6; attempt++) {
       SpreadsheetApp.flush();
-      actual = outputRange.getDisplayValues();
+      try {
+        if (job.rowMode === 'AUTO') {
+          const block = autoOutputBlock_(output, job);
+          actual = block.rows; job.outputStartRow = block.startRow; job.outputEndRow = block.endRow;
+        } else actual = outputRange.getDisplayValues();
+      } catch (error) {
+        if (error.name !== 'DiagnosticNG') throw error;
+        reason = error.message; consecutive = 0; Utilities.sleep(1000); continue;
+      }
       const errors = errorCells_(book.getId());
       const compared = compareCsv_(actual, expected);
       reason = errors.length ? '数式エラー: ' + errors.slice(0, 10).join(', ') : compared.reason;
@@ -66,6 +76,7 @@ function runConversionLocked_(rawJob) {
       Utilities.sleep(1000);
     }
     if (!matched) diagnosticNg_(reason || '再計算の完了を確認できません。');
+    result.resolvedRows = {csvStartRow: job.csvStartRow, csvEndRow: job.csvEndRow || before.length, pasteStartRow: job.pasteStartRow, pasteEndRow: job.pasteStartRow + selected.length - 1, outputStartRow: job.outputStartRow, outputEndRow: job.outputEndRow};
     result.step = 'CSV保存';
     verifySelectedInputs_(inputs);
     let text = serializeCsv_(actual, job.outputNewline);
