@@ -25,8 +25,10 @@ function runConversionLocked_(rawJob) {
     result.inputFiles = inputs.map(input => ({id: input.id, folderId: input.folderId, updatedAt: input.updatedAt}));
     result.step = '原本検査';
     inspectExcelFile_(originals[0]);
-    const before = readCsvFile_(originals[1], job.beforeEncoding, job.beforeHasHeader);
-    const expected = readCsvFile_(originals[2], job.expectedEncoding, job.expectedHasHeader);
+    result.inputFormats = {beforeCsv: {}, expectedCsv: {}};
+    const before = readCsvFile_(originals[1], job.beforeEncoding, job.beforeHasHeader, result.inputFormats.beforeCsv);
+    const expected = readCsvFile_(originals[2], job.expectedEncoding, job.expectedHasHeader, result.inputFormats.expectedCsv);
+    result.outputFormat = {encoding: job.outputEncoding, newline: job.outputNewline, bom: job.outputBom};
     const selected = selectInput_(before, job);
     const cellCount = (job.outputEndRow - job.outputStartRow + 1) * (job.outputEnd - job.outputStart + 1);
     if (cellCount > CONFIG.maxCells) diagnosticNg_('出力範囲が試作のセル数上限を超えています。');

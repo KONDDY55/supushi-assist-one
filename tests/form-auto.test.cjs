@@ -8,14 +8,15 @@ function answers(ctx, overrides={}) {
  const values={csvStartRow:'2',pasteStartRow:'3',outputStartRow:'1',outputEndRow:'8',beforeHasHeader:'あり',expectedHasHeader:'あり',beforeEncoding:'Shift_JIS',expectedEncoding:'UTF-8',outputEncoding:'UTF-8',outputNewline:'CRLF',outputBom:'あり',...overrides};
  return Object.fromEntries(ctx.formConditionFields_().map(f=>[f.title,values[f.key]]));
 }
-test('独自データの行・ヘッダー・文字コードをフォーム回答から取得する',()=>{
+test('独自データの行・ヘッダーを取得し、入出力形式はシステム設定する',()=>{
  const ctx=env();const job=ctx.parseFormConditions_(answers(ctx));
- assert.equal(job.csvStartRow,2);assert.equal(job.pasteStartRow,3);assert.equal(job.outputEndRow,8);assert.equal(job.beforeEncoding,'Shift_JIS');assert.equal(job.outputBom,true);
+ assert.equal(job.csvStartRow,2);assert.equal(job.pasteStartRow,3);assert.equal(job.outputEndRow,8);assert.equal(job.beforeEncoding,'AUTO');assert.equal(job.expectedEncoding,'AUTO');assert.equal(job.outputEncoding,'UTF-8');assert.equal(job.outputNewline,'CRLF');assert.equal(job.outputBom,true);
 });
-test('条件不足、少数・不正整数、選択肢外の値、逆順、Shift_JISのBOMを拒否する',()=>{
+test('条件不足、不正整数、ヘッダーの選択肢外、逆順を拒否する',()=>{
  const ctx=env();
- for(const override of [{csvStartRow:''},{pasteStartRow:'1.5'},{outputEndRow:'0'},{csvStartRow:'2e3'},{csvStartRow:'9007199254740993'},{beforeEncoding:'auto'},{beforeHasHeader:'yes'},{outputStartRow:'9',outputEndRow:'8'},{outputEncoding:'Shift_JIS',outputBom:'あり'}]) assert.throws(()=>ctx.parseFormConditions_(answers(ctx,override)),/変換条件の入力不備/);
- const job=ctx.parseFormConditions_(answers(ctx,{outputEncoding:'Shift_JIS',outputBom:'なし',expectedHasHeader:'なし'}));assert.equal(job.outputBom,false);assert.equal(job.expectedHasHeader,false);
+ for(const override of [{csvStartRow:''},{pasteStartRow:'1.5'},{outputEndRow:'0'},{csvStartRow:'2e3'},{csvStartRow:'9007199254740993'},{beforeHasHeader:'yes'},{outputStartRow:'9',outputEndRow:'8'}]) assert.throws(()=>ctx.parseFormConditions_(answers(ctx,override)),/変換条件の入力不備/);
+ const input=answers(ctx,{expectedHasHeader:'なし'});input['変換後CSVの文字コード']='Shift_JIS';input['変換後CSVにBOMを付けますか？']='なし';
+ const job=ctx.parseFormConditions_(input);assert.equal(job.outputBom,true);assert.equal(job.outputEncoding,'UTF-8');assert.equal(job.expectedHasHeader,false);
 });
 test('デモのハッシュに依存せず独自の3ファイルを受付・変換へ渡す',()=>{
  const records=new Map([['FORM_ITEMS','[]']]);const copied=[];let received;
@@ -30,11 +31,19 @@ test('デモのハッシュに依存せず独自の3ファイルを受付・変�
  assert.equal(ctx.processResponseLocked_(response).status,'OK');assert.equal(copied.length,3);assert.equal(received.excelFileId,'copy-custom.xlsx');assert.equal(received.email,'customer@example.com');assert.equal(received.sourceStart,'B');assert.equal(received.inputSheet,'原票');assert.equal(received.csvStartRow,2);assert.equal(received.pasteStartRow,3);
 });
 test('質問追加は冪等で、必須・選択肢・整数検証と対応表を設定する',()=>{
- const items=[];let setupCount=0;const records=new Map();
- function add(type){const obj={type,title:'',getType:()=>type,getTitle:()=>obj.title,getIndex:()=>items.indexOf(obj),setTitle:t=>{obj.title=t;return obj;},setHelpText:()=>obj,setRequired:v=>{obj.required=v;return obj;},setChoiceValues:v=>{obj.choices=v;return obj;},setValidation:v=>{obj.validation=v;return obj;},asListItem:()=>obj,asTextItem:()=>obj};items.push(obj);return obj;}
- const form={getItems:()=>items.slice(),addListItem:()=>add('LIST'),addTextItem:()=>add('TEXT')};
+ const items=[];let setupCount=0;const records=new Map();const backups=[];
+ function add(type){const obj={type,title:'',getId:()=>obj.title,getType:()=>type,getTitle:()=>obj.title,getIndex:()=>items.indexOf(obj),setTitle:t=>{obj.title=t;return obj;},setHelpText:()=>obj,setRequired:v=>{obj.required=v;return obj;},setChoiceValues:v=>{obj.choices=v;return obj;},setValidation:v=>{obj.validation=v;return obj;},asListItem:()=>obj,asTextItem:()=>obj,asSectionHeaderItem:()=>obj};items.push(obj);return obj;}
+ const form={getItems:()=>items.slice(),addListItem:()=>add('LIST'),addTextItem:()=>add('TEXT'),addSectionHeaderItem:()=>add('SECTION_HEADER'),getResponses:()=>[],deleteItem:item=>items.splice(items.indexOf(item),1),moveItem:(from,to)=>items.splice(to,0,items.splice(from,1)[0])};
+ ['前CSVの文字コード','正解の後CSVの文字コード','変換後CSVの文字コード','変換後CSVの改行コード','変換後CSVにBOMを付けますか？'].forEach(title=>add('LIST').setTitle(title));
  const validation={requireTextMatchesPattern:()=>validation,setHelpText:()=>validation,build:()=> 'validation'};
- const ctx=env({console,LockService:{getScriptLock:()=>({waitLock:()=>{},releaseLock:()=>{}})},FormApp:{openById:()=>form,createTextValidation:()=>validation}});
+ const ctx=env({console,MimeType:{PLAIN_TEXT:'text/plain'},DriveApp:{getFolderById:()=>({createFile:(...args)=>backups.push(args)})},LockService:{getScriptLock:()=>({waitLock:()=>{},releaseLock:()=>{}})},FormApp:{openById:()=>form,createTextValidation:()=>validation}});
  ctx.setupFormIntake=()=>{setupCount++;records.set('FORM_ITEMS','updated');};ctx.setupIndependentDataForm();ctx.setupIndependentDataForm();
- assert.equal(items.length,11);assert.equal(setupCount,2);assert.equal(records.get('FORM_ITEMS'),'updated');assert.ok(items.every(i=>i.required));assert.ok(items.filter(i=>i.type==='TEXT').every(i=>i.validation==='validation'));assert.equal(items.filter(i=>i.type==='LIST').length,7);
+ assert.equal(items.length,7);assert.equal(backups.length,1);assert.equal(items[0].title,'CSVの文字コード・出力形式について');assert.equal(setupCount,2);assert.equal(records.get('FORM_ITEMS'),'updated');assert.ok(items.filter(i=>i.type!=='SECTION_HEADER').every(i=>i.required));assert.ok(items.filter(i=>i.type==='TEXT').every(i=>i.validation==='validation'));assert.equal(items.filter(i=>i.type==='LIST').length,2);
+});
+test('旧質問の回答を保存できない場合は質問を削除しない',()=>{
+ let deleted=false;
+ const item={getTitle:()=> '前CSVの文字コード',getId:()=>42};
+ const form={getItems:()=>[item],getResponses:()=>[],deleteItem:()=>{deleted=true;}};
+ const ctx=env({MimeType:{PLAIN_TEXT:'text/plain'},DriveApp:{getFolderById:()=>({createFile:()=>{throw Error('backup failed');}})}});
+ assert.throws(()=>ctx.simplifyCsvFormatQuestions_(form),/backup failed/);assert.equal(deleted,false);
 });

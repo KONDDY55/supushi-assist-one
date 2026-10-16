@@ -1,7 +1,56 @@
-function readCsvFile_(file, encoding, header) {
+/** Strict UTF-8 validation rejects overlong encodings, surrogates and truncation. */
+function validUtf8Bytes_(bytes) {
+  for (let i = 0; i < bytes.length;) {
+    const a = bytes[i++];
+    if (a <= 0x7f) continue;
+    let n, low = 0x80, high = 0xbf;
+    if (a >= 0xc2 && a <= 0xdf) n = 1;
+    else if (a >= 0xe0 && a <= 0xef) { n = 2; if (a === 0xe0) low = 0xa0; if (a === 0xed) high = 0x9f; }
+    else if (a >= 0xf0 && a <= 0xf4) { n = 3; if (a === 0xf0) low = 0x90; if (a === 0xf4) high = 0x8f; }
+    else return false;
+    if (i + n > bytes.length || bytes[i] < low || bytes[i] > high) return false;
+    i++;
+    for (let j = 1; j < n; j++) if (bytes[i] < 0x80 || bytes[i++] > 0xbf) return false;
+  }
+  return true;
+}
+
+function csvNewline_(text) {
+  const types = new Set((text.match(/\r\n|\r|\n/g) || []));
+  return types.size > 1 ? 'MIXED' : types.has('\r\n') ? 'CRLF' : types.has('\n') ? 'LF' : types.has('\r') ? 'CR' : 'NONE';
+}
+
+function decodeCsvBlob_(blob, encoding) {
+  if (encoding !== 'AUTO') return {text: blob.getDataAsString(encoding), encoding: encoding};
+  const bytes = blob.getBytes().map(value => value & 255);
+  const invalid = 'CSVの文字コードを自動判定できません。Excel等で「CSV UTF-8」形式に保存し直して再提出してください。';
+  if (bytes.includes(0) || bytes.includes(0x1b) || (bytes[0] === 0xff && bytes[1] === 0xfe) || (bytes[0] === 0xfe && bytes[1] === 0xff)) diagnosticNg_(invalid);
+  const bom = bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf;
+  const content = bom ? bytes.slice(3) : bytes;
+  const payload = Utilities.newBlob(content.map(value => value > 127 ? value - 256 : value));
+  const utf8 = validUtf8Bytes_(content) ? payload.getDataAsString('UTF-8') : null;
+  if (bom) {
+    if (utf8 === null || utf8.includes('\uFFFD')) diagnosticNg_(invalid);
+    return {text: utf8, encoding: 'UTF-8'};
+  }
+  let sjis = null;
+  try {
+    const text = payload.getDataAsString('Shift_JIS');
+    const roundtrip = Utilities.newBlob('').setDataFromString(text, 'Shift_JIS').getBytes().map(value => value & 255);
+    if (!text.includes('\uFFFD') && roundtrip.length === content.length && roundtrip.every((value, i) => value === content[i])) sjis = text;
+  } catch (error) { /* Unsupported or invalid Shift_JIS is not guessed. */ }
+  if (utf8 !== null && sjis !== null && utf8 !== sjis) diagnosticNg_('CSVの文字コードを自動判定できません。UTF-8とShift_JISの両方で読めるため判定が曖昧です。Excel等で「CSV UTF-8」形式に保存し直して再提出してください。');
+  if (utf8 !== null && !utf8.includes('\uFFFD')) return {text: utf8, encoding: 'UTF-8'};
+  if (sjis !== null) return {text: sjis, encoding: 'Shift_JIS'};
+  diagnosticNg_(invalid);
+}
+
+function readCsvFile_(file, encoding, header, formatInfo) {
   if (!/\.csv$/i.test(file.getName())) diagnosticNg_('CSV拡張子ではありません。');
   if (file.getSize() > CONFIG.maxBytes) diagnosticNg_('CSVが10 MBを超えています。');
-  let text = file.getBlob().getDataAsString(encoding).replace(/^\uFEFF/, '');
+  const decoded = decodeCsvBlob_(file.getBlob(), encoding);
+  let text = decoded.text.replace(/^\uFEFF/, '');
+  if (formatInfo) Object.assign(formatInfo, {encoding: decoded.encoding, newline: csvNewline_(text)});
   if (text.includes('\uFFFD') || text.includes('\u0000')) diagnosticNg_('文字コードを確認してください。');
   // Remove a terminal record separator only; embedded newlines are retained.
   text = text.replace(/(?:\r\n|\n|\r)$/, '');

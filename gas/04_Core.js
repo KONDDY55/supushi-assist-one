@@ -33,7 +33,7 @@ function validateJob_(job) {
   if (job.outputEndRow < job.outputStartRow) diagnosticNg_('出力行範囲が逆です。');
   if (typeof job.beforeHasHeader !== 'boolean' || typeof job.expectedHasHeader !== 'boolean') diagnosticNg_('CSVのヘッダー有無を指定してください。');
   ['beforeEncoding', 'expectedEncoding', 'outputEncoding'].forEach(key => {
-    if (!['UTF-8', 'Shift_JIS'].includes(job[key])) diagnosticNg_('文字コードを指定してください: ' + key);
+    if (!(key === 'outputEncoding' ? ['UTF-8', 'Shift_JIS'] : ['UTF-8', 'Shift_JIS', 'AUTO']).includes(job[key])) diagnosticNg_('文字コードを指定してください: ' + key);
   });
   if (!['LF', 'CRLF'].includes(job.outputNewline) || typeof job.outputBom !== 'boolean') diagnosticNg_('CSV改行・BOMの設定が必要です。');
   if (job.outputBom && job.outputEncoding !== 'UTF-8') diagnosticNg_('BOMはUTF-8のみ使用できます。');
