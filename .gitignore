@@ -1,0 +1,15 @@
+.clasp.json
+.clasprc.json
+.env
+.env.*
+!.env.example
+node_modules/
+data/
+outputs/
+.DS_Store
+
+# Local operational settings, demo IDs and private working records
+gas/00_Config.js
+gas/08_DemoTest.js
+docs/*
+!docs/public-setup.md
